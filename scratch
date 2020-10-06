@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Sep 21 10:17:48 2020
+
+@author: jenny-wiersema
+"""
+
+pd.date_range(start=str(year), end=str(year+1), 
+                         freq='W-SUN').strftime('%m/%d/%Y').tolist()
+
+
+
+pd.date_range(start = start_date, end = end_date, freq = 'W-FRI')
+
+
+
+# ## moving average plot - turn into function
+# ma_100 = data.loc[:,idx[:,'Adj Close']].rolling(window=10).mean() #10 day moving average
+
+
+# ax1 = plt.subplot2grid((7,1), (0,0), rowspan=4, colspan=1)
+# ax2 = plt.subplot2grid((7,1), (5,0), rowspan=1, colspan=1, sharex=ax1)
+# ax1.plot(data.loc[:,idx['AMZN','Adj Close']])
+# ax1.plot(ma_100['AMZN'])
+# ax2.bar(data.index, data.loc[:,idx['AMZN','Volume']])
+# ax1.set_title('Adjusted Close')
+# ax2.set_title('Volume')
+# plt.subplots_adjust(hspace = 0.2)
+# plt.setp(ax1.get_xticklabels(), ha='center', rotation=30, fontsize = 8)
+# plt.setp(ax2.get_xticklabels(), ha='center', rotation=30, fontsize = 8)
+# plt.show()
+
+
+
+ #### Candlestick plot examples ####
+# ### open/high/low/close
+# df = data['AMZN']
+# df_ohlc = df['Adj Close'].resample('10D').ohlc()
+ 
+ 
+# mpf.plot(df_ohlc, type='candle', style='charles')
+#             title='S&P 500, Nov 2019',
+#             ylabel='Price ($)',
+#             ylabel_lower='Shares \nTraded',
+#             volume=True, 
+#             mav=(3,6,9), 
+#             savefig='test-mplfiance.png')
+
+
+# tickers_data = []
+# tickers_list = ['AMZN', 'AAPL', 'GOOG']
+
+# for ticker in tickers_list:
+#     ticker_object = yf.Ticker(ticker)
+
+#     #convert info() output from dictionary to dataframe
+#     temp = pd.DataFrame.from_dict(ticker_object.info, orient="index")
+#     temp.reset_index(inplace=True)
+#     temp.columns = ["Attribute", "Recent"]
+    
+#     # add (ticker, dataframe) to main dictionary
+#     tickers_data[ticker] = temp
+
+# tickers_data
+
+
+
+
+
+                
+    
+    

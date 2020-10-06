@@ -6,65 +6,170 @@ Created on Sun Sep 20 17:21:08 2020
 @author: jenny-wiersema
 """
 
-import datetime as dt
 import bs4 as bs
 import requests
+import yfinance as yf
+
+import pandas as pd
+import numpy as np
 import xarray as xr 
 
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import OneHotEncoder
 
-### Transforms dates from a yyyy-mm-dd string to a datetime object ###
-def adjust_date(date):
-    date_update = dt.datetime(int(date[:4]), int(date[5:7]), int(date[8:]))
-    return date_update
+import matplotlib.pyplot as plt
 
-### pulls S&P 500 data from wikipedia site
-def save_sp500_data():
-    # pull data from website
-    headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux i686) AppleWebKit/537.17 (KHTML, like Gecko) Chrome/24.0.1312.27 Safari/537.17'}
-    resp = requests.get('http://en.wikipedia.org/wiki/List_of_S%26P_500_companies',
-                        headers=headers)
-    soup = bs.BeautifulSoup(resp.text, 'lxml')
-    table = soup.find('table', {'class': 'wikitable sortable'})
 
-    # parse data and create lists
-    tickers = []
-    companies = []
-    sectors = []
-    subsectors = []
+
+def backfill(price, date, price_data):
+    """
+
+    Backfill nan pricing data, up to 4 days prior. 
+
+    Inputs
+    ----------
+    price: xarray 
+        xarray containing Adj Close price data for a single date
+    date: datetime
+        date for pricing data
+    price_data: xarray
+        xarray containing all pricing data 
+
+    Outputs
+    -------
+    price: xarray
+        xarray containing original price input, with nan data updated to one of the previous 4 days, if available. 
+
+    """
     
-    for row in table.findAll('tr')[1:]:
-        ticker = row.findAll('td')[0].text
-        company_name = row.findAll('td')[1].text
-        sector = row.findAll('td')[3].text
-        subsector = row.findAll('td')[4].text
+    i = 0 
+    while i <=4:
+        i = i + 1
+        d = date - pd.Timedelta(i, unit='d')
+        if d in list(price_data['date']):
+            p_back = price_data.sel(date = d, drop = True)['Adj Close']
+            price = price.fillna(p_back)
+
+    return price
+
+
+def calc_fret(dates, price_data, SP_data):
+    """
+    Calculate weekly factor returns for sector based factors
+    
+    ## future improvement, handle multiple types of exposures ##
+    
+    Inputs
+    ----------
+    dates: datetime
+        list of weekly dates
+    price_data: xarray
+        xarray containing all pricing data 
+    SP_data: xarray
+        xarray containing SP_500 data, scraped from wikipedia page
+
+    Outputs
+    -------
+    f_ret: DataFrame
+        dataframe containing weekly factor returns for all sector factors
+
+    """
+    f_ret = pd.DataFrame(index = dates[1:], columns = list(set(SP_data['sector'].values)))
+
+    for date_0, date_1 in zip(dates[:-1], dates[1:]):
         
-        tickers.append(ticker[:-1]) # remove /n from end of tickers
-        companies.append(company_name)
-        sectors.append(sector)
-        subsectors.append(subsector)
+        if date_0.year != date_1.year:
+            print('Starting ' + str(date_1.year))
         
-    # compile data into dataset 
-    SP_data = xr.Dataset(
-    {
-        'sector': ('ticker', sectors),
-        'subsector': ('ticker', subsectors),
-        'company': ('ticker', companies),
-    },
-    {'ticker': tickers},
-    )
+        ## load pricing data. If entire day is missing, use previous day (Holiday Handling)
+        p0 = pull_price_data(date_0, price_data)
+        p1 = pull_price_data(date_1, price_data)
         
-    return SP_data
+        ## backfill missing data, up to 4 days.
+        p0 = backfill(p0, date_0, price_data)
+        p1 = backfill(p1, date_1, price_data)
+            
+        ## calculate relative returns
+        ret = p1/p0 - 1
+        
+        ## apply winsorization to returns
+        # clip all returns +/- 5IQR from the median
+        ret = winsorize(ret)
+        # remove nan data
+        ret = ret.dropna(dim = 'ticker') ## remove nan data
+    
+        ## define sectors ##
+        sectors = SP_data.sel(ticker = ret.ticker)[['sector']].to_dataframe()
+        
+        onehot = OneHotEncoder(sparse = False)
+        X = onehot.fit_transform(sectors)
+        X = pd.DataFrame(X, index = sectors.index, columns = onehot.categories_)
+    
+        ## calculate sector factor returns ##
+        y = np.array(ret['Adj Close'].values).reshape(-1, 1)
+        
+        lin_reg = LinearRegression(fit_intercept = False)
+        lin_reg.fit(X,y)
+        
+        f_ret.loc[date_1] = lin_reg.coef_
+        
+    return f_ret
+    
+    
+def pull_price_data(d0, price_data):
+    """
+    pull price for date d0, with holiday handling logic to pull previous date 
+    if date is missing
+
+    Inputs
+    ----------
+    d0: datetime
+        a single date, to pull price
+    price_data: xarray
+        xarray containing all pricing data 
+
+    Outputs
+    -------
+    p0: xarray
+        Description of return value
+
+    """
+    try:
+        p0 = price_data.sel(date = d0, drop = True)[['Adj Close']]
+    except:
+        d1 = d0 - pd.Timedelta(1, unit='d')
+        p0 = price_data.sel(date = d1, drop = True)[['Adj Close']]
+    
+    return p0
+
 
 ## loads pricing data from yahoo finance
 def load_pricing(start, end, refresh_sp = False, refresh_pricing = False, save_pricing = False):
-    ## inputs ##
-    # start: start date of factor returns to load
-    # end: end date of price data to load
-    # refresh_sp: if True, repull s&p data from wikipedia table
-    # refresh_pricing: if True, repull pricing data from yahoo finance
-    # save_pricing: if True, save pricing information into netcdf file
-    ## outputs ##
-    # price_xr: xarray containing pricing information    
+    """
+    load pricing information and S&P 500 information. Pricing information is pulled using yahoo 
+    finance. S&P500 information is pulled from a wikipedia table. 
+
+    Inputs
+    ----------
+    start: datetime
+        start date for pricing information to load
+    end: datetime
+        end date for pricing information to load
+    refresh_sp: bool, default False
+        if True, pull S&P data from wikipedia table
+    refresh_pricing: bool, default False
+        if True, pull pricing data from yahoo finance
+    save_pricing: bool, default False
+        if True, save pricing information in netcdf file
+
+    Outputs
+    -------
+    price_xr: xarray
+        xarray containing pricing data for dates between start and end date
+    SP_data: xarray
+        xarray containing sector information pulled from wikipedia page
+
+    """
     
     ## identify tickers in S&P500 ##
     
@@ -104,36 +209,97 @@ def load_pricing(start, end, refresh_sp = False, refresh_pricing = False, save_p
     if save_pricing == True:
         price_xr.to_netcdf('price_xr.nc')
      
-    return price_xr
+    return price_xr, SP_data
 
 
-## backfill pricing information for null data
-def backfill(price, date, price_data):
-    for p in price:
-        if np.isnan(p):
-            i = 0
-            while np.isnan(p) and i <= 4:
-                i = i + 1
-                d = date - pd.Timedelta(i, unit='d')
-                if d in list(price_data['date']):
-                    p_back = price_data.sel(date = d, ticker = p.ticker, drop = True)['Adj Close']
-                    price.loc[dict(ticker = p.ticker)] = p_back
-                    
-    return price
+### pulls S&P 500 data from wikipedia site
+def save_sp500_data():
+    """
+    Pull S&P500 information from wikipedia page. 
 
-def winsorize(ret):
+    Inputs
+    ----------
+    None
+    
+    Outputs
+    -------
+    SP_data: xarray
+        xarray containing sector information pulled from wikipedia page
+
+    """
+    # pull data from website
+    headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux i686) AppleWebKit/537.17 (KHTML, like Gecko) Chrome/24.0.1312.27 Safari/537.17'}
+    resp = requests.get('http://en.wikipedia.org/wiki/List_of_S%26P_500_companies',
+                        headers=headers)
+    soup = bs.BeautifulSoup(resp.text, 'lxml')
+    table = soup.find('table', {'class': 'wikitable sortable'})
+
+    # parse data and create lists
+    tickers = []
+    companies = []
+    sectors = []
+    subsectors = []
+    
+    for row in table.findAll('tr')[1:]:
+        ticker = row.findAll('td')[0].text
+        company_name = row.findAll('td')[1].text
+        sector = row.findAll('td')[3].text
+        subsector = row.findAll('td')[4].text
+        
+        tickers.append(ticker.strip('\n')) # remove /n from end of tickers
+        companies.append(company_name.strip('\n'))
+        sectors.append(sector.strip('\n'))
+        subsectors.append(subsector.strip('\n'))
+        
+
+    # compile data into dataset 
+    SP_data = xr.Dataset(
+    {
+        'sector': ('ticker', sectors),
+        'subsector': ('ticker', subsectors),
+        'company': ('ticker', companies),
+    },
+    {'ticker': tickers},
+    )
+        
+    return SP_data
+
+
+def winsorize(ret, plot_scatter = False):
+    """
+    winsorize weekly factor returns, putting a cap and a floor on return outside mean +/- 5IQR. 
+    
+    Inputs
+    ----------
+    ret: xarray
+        xarray containing 
+    plot_scatter: bool, default False
+        Description of arg2
+
+    Outputs
+    -------
+    output: 
+        Description of return value
+
+    """
     IQR = ret.quantile(0.75) - ret.quantile(0.25) #interquartile range
-    ret_median = ret.quantile(0.5)
+    IQR = IQR['Adj Close'].values
+    ret_median = ret.quantile(0.5)['Adj Close'].values
     
     cap = ret_median + 5*IQR
     floor = ret_median - 5*IQR
+
+    output = ret.clip(floor, cap)
     
-    cap = float(cap.to_pandas())
-    floor = float(floor.to_pandas())
-
-    ret = ret.clip(floor, cap)
-
-    return ret
+    if plot_scatter == True:
+        plt.figure(figsize = (6,6))
+        plt.plot(ret['Adj Close'], output['Adj Close'], '*')
+        plt.xlabel('Original Returns')
+        plt.ylabel('Winsorized Returns')
+        plt.title('Comparison of Winsorized Returns')
+        plt.show()
+    
+    return output
 
 
 
