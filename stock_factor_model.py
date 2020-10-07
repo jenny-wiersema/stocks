@@ -124,7 +124,7 @@ plot_bias_stats(port_ret['Overall'], port_risk['Portfolio Risk'],
 def calc_risk_decomp(port_X, f_cov, date):
     
     X = port_X.loc[date]                            # portfolio exposures
-    F = f_cov.loc[date - pd.Timedelta(i, unit='w')] # factor covariance matrix
+    F = f_cov.loc[date - pd.Timedelta(1, unit='w')] # factor covariance matrix
     sigma_P = (X.T.dot(F).dot(X))**0.5              # portfolio volatility
     sigma_F = np.diag(F)**0.5                       # factor volatilities
     corr_P = 1/sigma_P*X.T.dot(F)/(np.diag(F)**0.5) # correlation between factors and portfolios
