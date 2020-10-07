@@ -74,7 +74,9 @@ def calc_fret(dates, price_data, SP_data):
         dataframe containing weekly factor returns for all sector factors
 
     """
-    f_ret = pd.DataFrame(index = dates[1:], columns = list(set(SP_data['sector'].values)))
+    all_sectors = list(set(SP_data['sector'].values))
+    all_sectors.sort()
+    f_ret = pd.DataFrame(index = dates[1:], columns = all_sectors)
 
     for date_0, date_1 in zip(dates[:-1], dates[1:]):
         
@@ -114,36 +116,107 @@ def calc_fret(dates, price_data, SP_data):
         f_ret.loc[date_1] = lin_reg.coef_
         
     return f_ret
+ 
     
-    
-def pull_price_data(d0, price_data):
+def calc_portfolio(dates, price_data, SP_data):
     """
-    pull price for date d0, with holiday handling logic to pull previous date 
-    if date is missing
+    Calculate portfolio weekly returns, equally weighted
 
+    
     Inputs
     ----------
-    d0: datetime
-        a single date, to pull price
+    dates: datetime
+        list of weekly dates
     price_data: xarray
         xarray containing all pricing data 
+    SP_data: xarray
+        xarray containing SP_500 data, scraped from wikipedia page
 
     Outputs
     -------
-    p0: xarray
-        Description of return value
+    port_ret: DataFrame
+        dataframe containing weekly portfolio returns, both overall and sector subportfolios
+    port_X: DataFrame
+        dataframe containing weekly portfolio exposures by sector
+    """
+    
+    all_sectors = list(set(SP_data['sector'].values))
+    all_sectors.sort()
+    port_ret = pd.DataFrame(index = dates[1:], columns = all_sectors)
+    port_ret_overall = pd.DataFrame(index = dates[1:], columns = ['Overall'])
+
+    
+    port_X = pd.DataFrame(index = dates[1:], columns = all_sectors)                            
+
+    for date_0, date_1 in zip(dates[:-1], dates[1:]):
+        
+        if date_0.year != date_1.year:
+            print('Starting ' + str(date_1.year))
+        
+        ## load pricing data. If entire day is missing, use previous day (Holiday Handling)
+        p0 = pull_price_data(date_0, price_data)
+        p1 = pull_price_data(date_1, price_data)
+        
+        ## backfill missing data, up to 4 days.
+        p0 = backfill(p0, date_0, price_data)
+        p1 = backfill(p1, date_1, price_data)
+            
+        ## calculate relative returns
+        ret = p1/p0 - 1
+        
+        ## calculate portfolio returns
+        
+        ret['sector'] = SP_data['sector']
+        ret = ret.set_coords('sector')
+        
+        port_ret_overall.loc[date_1] = ret['Adj Close'].mean()
+        port_ret.loc[date_1] = ret['Adj Close'].groupby('sector').mean()
+        
+        ## calculate portfolio exposures
+        
+        counts = ret.groupby('sector').count()['Adj Close']
+        
+        port_X.loc[date_1] = counts/counts.sum()
+        
+        
+
+    port_ret['Overall'] = port_ret_overall
+        
+    return port_ret, port_X
+   
+    
+def calc_risk(dates, port_X, port_ret, f_cov):
+    """
+    calculate portfolio level risk, using (XFX)^1/2
+
+    Inputs
+    ----------
+    dates: datetime
+        a series of dates for calculation
+    port_X: DataFrame
+        dataframe containing weekly portfolio exposures by sector
+    port_ret: DataFrame
+        dataframe containing weekly portfolio returns, both overall and sector subportfolios
+    f_cov: DataFrame
+        dataframe containing weekly covariance matrix
+
+    Outputs
+    -------
+    port_risk: dataframe
+        dataframe containing portfolio risk
 
     """
-    try:
-        p0 = price_data.sel(date = d0, drop = True)[['Adj Close']]
-    except:
-        d1 = d0 - pd.Timedelta(1, unit='d')
-        p0 = price_data.sel(date = d1, drop = True)[['Adj Close']]
-    
-    return p0
+    port_risk = pd.DataFrame(index = dates, columns = ['Portfolio Risk'])    
 
+    for d in dates:    
+        
+        X_d = port_X.loc[d]
+        S_d = f_cov.loc[d]
+        port_risk.loc[d] = (X_d.dot(S_d).dot(X_d))**0.5
+        
+    return port_risk
+           
 
-## loads pricing data from yahoo finance
 def load_pricing(start, end, refresh_sp = False, refresh_pricing = False, save_pricing = False):
     """
     load pricing information and S&P 500 information. Pricing information is pulled using yahoo 
@@ -212,6 +285,121 @@ def load_pricing(start, end, refresh_sp = False, refresh_pricing = False, save_p
     return price_xr, SP_data
 
 
+def plot_bias_stats(port_ret, port_risk, title, win = 52):
+    """
+    Calculate and plot bias statistics for rolling windows
+    
+    Inputs
+    ----------
+    port_ret: DataFrame
+        dataframe containing weekly portfolio returns, both overall and sector subportfolios
+    port_risk: dataframe
+        dataframe containing portfolio risk
+    title: str
+        title for plot
+    win: int, default = 52
+        rolling window used in bias stat calculation
+    
+    Outputs
+    -------
+    None
+    
+    """
+    z = (port_ret/port_risk.shift(periods = 1)).clip(-3,3)
+    
+    bias_stats = z.rolling(window = win).std()
+    
+    plt.figure(figsize=(10,6))
+    plt.plot(bias_stats, label = 'bias stat')
+    x_min, x_max = plt.xlim()
+    plt.hlines(1 + np.sqrt(2/win), xmin = x_min, xmax = x_max, color = 'k', 
+               lw = 2, ls = '--', label = '95% confidence interval')
+    plt.hlines(1 - np.sqrt(2/win), xmin = x_min, xmax = x_max, color = 'k', 
+               lw = 2, ls = '--', label = '')
+    plt.title(title)
+    plt.legend(loc = 'best')
+    plt.show()
+    
+    
+def plot_risk_envelope(port_ret, port_risk):
+    """
+    Calculate 2sigma risk envelope and outputs plot. Risk plots use t-1 values
+    as risk is a forecast and cannot include t return information. 
+    
+    Inputs
+    ----------
+    port_ret: DataFrame
+        dataframe containing weekly portfolio returns, both overall and sector subportfolios
+    port_risk: dataframe
+        dataframe containing portfolio risk
+
+    Outputs
+    -------
+    None
+    
+    """
+    
+    plt.figure(figsize=(10,6))
+    plt.plot(2*port_risk.shift(periods = 1), color = 'b', label = '2\u03C3 Risk')
+    plt.plot(-2*port_risk.shift(periods = 1), color = 'b', label = '')
+    plt.plot(port_ret, '*', color = 'r', label = 'Return')
+    plt.title('Weekly 2\u03C3 Risk Envelope Plot')
+    plt.legend(loc = 'best')
+    plt.show()
+
+def plot_vol(f_vol, min_history = 52):
+    """
+    plot weekly factor volatilities 
+    
+    Inputs
+    ----------
+    f_vol: dataframe
+        dataframe containing the weekly factor volatilities
+    min_history: int, Default = 52
+        minimum number of weeks to calculate volatility
+
+    Outputs
+    -------
+    None
+
+    """
+    
+    
+    plt.figure(figsize=(12,6))
+    plt.gca().set_prop_cycle(plt.cycler('color', plt.cm.jet(np.linspace(0, 1, f_vol.shape[1]))))
+    plt.plot(100*f_vol[min_history:])
+    plt.legend(f_vol.columns)
+    plt.title('Weekly Factor Volatilities (%)')    
+    
+
+def pull_price_data(d0, price_data):
+    """
+    pull price for date d0, with holiday handling logic to pull previous date 
+    if date is missing
+
+    Inputs
+    ----------
+    d0: datetime
+        a single date, to pull price
+    price_data: xarray
+        xarray containing all pricing data 
+
+    Outputs
+    -------
+    p0: xarray
+        Description of return value
+
+    """
+    try:
+        p0 = price_data.sel(date = d0, drop = True)[['Adj Close']]
+    except:
+        d1 = d0 - pd.Timedelta(1, unit='d')
+        p0 = price_data.sel(date = d1, drop = True)[['Adj Close']]
+    
+    return p0
+
+
+
 ### pulls S&P 500 data from wikipedia site
 def save_sp500_data():
     """
@@ -265,6 +453,8 @@ def save_sp500_data():
     return SP_data
 
 
+
+
 def winsorize(ret, plot_scatter = False):
     """
     winsorize weekly factor returns, putting a cap and a floor on return outside mean +/- 5IQR. 
@@ -274,12 +464,12 @@ def winsorize(ret, plot_scatter = False):
     ret: xarray
         xarray containing 
     plot_scatter: bool, default False
-        Description of arg2
+        If True, plot scatterplot showing returns before/after winsorization
 
     Outputs
     -------
-    output: 
-        Description of return value
+    output: xarray
+        returns after winsorization
 
     """
     IQR = ret.quantile(0.75) - ret.quantile(0.25) #interquartile range
