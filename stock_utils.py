@@ -215,6 +215,46 @@ def calc_risk(dates, port_X, port_ret, f_cov):
         port_risk.loc[d] = (X_d.dot(S_d).dot(X_d))**0.5
         
     return port_risk
+
+
+def calc_risk_decomp(port_X, f_cov, date):
+    """
+    calculate portfolio XSR risk breakdown
+
+    Inputs
+    ----------
+    port_X: DataFrame
+        dataframe containing weekly portfolio exposures by sector
+    f_cov: DataFrame
+        dataframe containing weekly covariance matrix
+    date: datetime
+        analysis date
+        
+    Outputs
+    -------
+    xsr: dataframe
+        dataframe containing XSR risk decomposition
+
+    """
+    X = port_X.loc[date]                            # portfolio exposures
+    F = f_cov.loc[date - pd.Timedelta(1, unit='w')] # factor covariance matrix
+    sigma_P = (X.T.dot(F).dot(X))**0.5              # portfolio volatility
+    sigma_F = np.diag(F)**0.5                       # factor volatilities
+    corr_P = 1/sigma_P*X.T.dot(F)/(np.diag(F)**0.5) # correlation between factors and portfolios
+    XS = (X * sigma_F*52**0.5)
+    XSR = XS * corr_P
+    
+    xsr = pd.DataFrame(index = X.index)
+    xsr['Exposure (%)'] = [round(100*i,1) for i in X]
+    xsr['Annual Factor Vol (%)'] = 100*(sigma_F*52**0.5).round(3)
+    xsr['Correlation with Portfolio (%)'] = [round(100*i,1) for i in corr_P]
+    xsr['Annual Factor Risk (%)'] = [round(100*i,2) for i in XS]
+    xsr['Annual Factor Risk Contribution (%)'] = [round(100*i,2) for i in XSR]
+    xsr['Factor Risk Contribution (Percent of Total)'] = \
+        [round(i,2) for i in 100*XSR/XSR.sum()]
+        
+    return xsr
+    
            
 
 def load_pricing(start, end, refresh_sp = False, refresh_pricing = False, save_pricing = False):

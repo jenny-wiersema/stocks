@@ -88,7 +88,7 @@ for sector in f_ret.columns:
     f_vol[sector] = f_vol_sector
 
 
-vol_plot(f_vol)
+plot_vol(f_vol)
     
 
 ##########################################
@@ -121,25 +121,7 @@ plot_bias_stats(port_ret['Overall'], port_risk['Portfolio Risk'],
 #########################################    
     
     
-def calc_risk_decomp(port_X, f_cov, date):
-    
-    X = port_X.loc[date]                            # portfolio exposures
-    F = f_cov.loc[date - pd.Timedelta(1, unit='w')] # factor covariance matrix
-    sigma_P = (X.T.dot(F).dot(X))**0.5              # portfolio volatility
-    sigma_F = np.diag(F)**0.5                       # factor volatilities
-    corr_P = 1/sigma_P*X.T.dot(F)/(np.diag(F)**0.5) # correlation between factors and portfolios
-    XS = (X * sigma_F*52**0.5)
-    XSR = XS * corr_P
-    
-    xsr = pd.DataFrame(index = X.index)
-    xsr['Exposure (%)'] = [round(100*i,1) for i in X]
-    xsr['Annual Factor Vol (%)'] = 100*(sigma_F*52**0.5).round(3)
-    xsr['Correlation with Portfolio (%)'] = [round(100*i,1) for i in corr_P]
-    xsr['Annual Factor Risk (%)'] = [round(100*i,2) for i in XS]
-    xsr['Annual Factor Risk Contribution (%)'] = [round(100*i,2) for i in XSR]
-    xsr['Factor Risk Contribution (Percent of Total)'] = \
-        [round(i,2) for i in 100*XSR/XSR.sum()]
-    
+XSR = calc_risk_decomp(port_X, f_cov, date)
     
     
 
