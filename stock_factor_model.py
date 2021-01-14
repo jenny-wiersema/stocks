@@ -39,7 +39,7 @@ style.use('ggplot')
 
 ## start and end dates ##
 start_date = '2000-01-01'
-end_date = '2020-10-02'
+end_date = '2020-12-08'
 
 ## covariance matrix parameters ##
 half_life = 18 # half_life of covariance matrix, in weeks
@@ -53,8 +53,8 @@ weights = 'equal' # weight can either be equal, or an array of weights
 ##################################
 
 
-price_data, SP_data = load_pricing(start = start_date, end = end_date, refresh_sp = True, 
-                                   refresh_pricing = True, save_pricing = False)
+price_data, SP_data = load_pricing(start = start_date, end = end_date, refresh_sp = False, 
+                                   refresh_pricing = True, save_pricing = True)
 
 
 ######################################
@@ -89,7 +89,6 @@ for sector in f_ret.columns:
 
 
 plot_vol(f_vol)
-    
 
 ##########################################
 ## Calculate Portfolio Risk/Backtesting ##
